@@ -4,13 +4,14 @@
 from setuptools import setup, find_packages
 
 import os
+import re
 import sys
 import codecs
 
 CELERY_COMPAT_PROGRAMS = int(os.environ.get('CELERY_COMPAT_PROGRAMS', 1))
 
 if sys.version_info < (2, 7):
-    raise Exception('Celery 3.2 requires Python 2.7 or higher.')
+    raise Exception('Celery 4.0 requires Python 2.7 or higher.')
 
 # -*- Upgrading from older versions -*-
 
@@ -75,11 +76,13 @@ classifiers = [s.strip() for s in classes.split('\n') if s]
 
 # -*- Distribution Meta -*-
 
-import re
 re_meta = re.compile(r'__(\w+?)__\s*=\s*(.*)')
 re_vers = re.compile(r'VERSION\s*=.*?\((.*?)\)')
 re_doc = re.compile(r'^"""(.+?)"""')
-rq = lambda s: s.strip("\"'")
+
+
+def rq(s):
+    return s.strip("\"'")
 
 
 def add_default(m):
@@ -116,12 +119,23 @@ def strip_comments(l):
     return l.split('#', 1)[0].strip()
 
 
-def reqs(*f):
+def _pip_requirement(req):
+    if req.startswith('-r '):
+        _, path = req.split()
+        return reqs(*path.split('/'))
+    return [req]
+
+
+def _reqs(*f):
     return [
-        r for r in (
+        _pip_requirement(r) for r in (
             strip_comments(l) for l in open(
                 os.path.join(os.getcwd(), 'requirements', *f)).readlines()
         ) if r]
+
+
+def reqs(*f):
+    return [req for subreq in _reqs(*f) for req in subreq]
 
 install_requires = reqs('default.txt')
 if JYTHON:
@@ -153,16 +167,22 @@ if CELERY_COMPAT_PROGRAMS:
 
 # -*- Extras -*-
 
-extras = lambda *p: reqs('extras', *p)
+
+def extras(*p):
+    return reqs('extras', *p)
+
 # Celery specific
 features = {
     'auth', 'cassandra', 'memcache', 'couchbase', 'threads',
     'eventlet', 'gevent', 'msgpack', 'yaml', 'redis',
     'mongodb', 'sqs', 'couchdb', 'riak', 'beanstalk', 'zookeeper',
     'zeromq', 'sqlalchemy', 'librabbitmq', 'pyro', 'slmq',
+    'new_cassandra',
 }
 extras_require = {x: extras(x + '.txt') for x in features}
 extra['extras_require'] = extras_require
+
+print(tests_require)
 
 # -*- %%% -*-
 

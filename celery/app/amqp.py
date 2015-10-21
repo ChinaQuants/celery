@@ -18,11 +18,11 @@ from kombu import Connection, Consumer, Exchange, Producer, Queue
 from kombu.common import Broadcast
 from kombu.pools import ProducerPool
 from kombu.utils import cached_property
-from kombu.utils.encoding import safe_repr
 from kombu.utils.functional import maybe_list
 
 from celery import signals
 from celery.five import items, string_t
+from celery.utils.saferepr import saferepr
 from celery.utils.text import indent as textindent
 from celery.utils.timeutils import to_utc
 
@@ -49,6 +49,7 @@ class Queues(dict):
                              the occurrence of unknown queues
                              in `wanted` will raise :exc:`KeyError`.
     :keyword ha_policy: Default HA policy for queues with none set.
+    :keyword max_priority: Default x-max-priority for queues with none set.
 
 
     """
@@ -57,13 +58,15 @@ class Queues(dict):
     _consume_from = None
 
     def __init__(self, queues=None, default_exchange=None,
-                 create_missing=True, ha_policy=None, autoexchange=None):
+                 create_missing=True, ha_policy=None, autoexchange=None,
+                 max_priority=None):
         dict.__init__(self)
         self.aliases = WeakValueDictionary()
         self.default_exchange = default_exchange
         self.create_missing = create_missing
         self.ha_policy = ha_policy
         self.autoexchange = Exchange if autoexchange is None else autoexchange
+        self.max_priority = max_priority
         if isinstance(queues, (tuple, list)):
             queues = {q.name: q for q in queues}
         for name, q in items(queues or {}):
@@ -109,6 +112,10 @@ class Queues(dict):
             if queue.queue_arguments is None:
                 queue.queue_arguments = {}
             self._set_ha_policy(queue.queue_arguments)
+        if self.max_priority is not None:
+            if queue.queue_arguments is None:
+                queue.queue_arguments = {}
+            self._set_max_priority(queue.queue_arguments)
         self[queue.name] = queue
         return queue
 
@@ -119,6 +126,8 @@ class Queues(dict):
             options['routing_key'] = name
         if self.ha_policy is not None:
             self._set_ha_policy(options.setdefault('queue_arguments', {}))
+        if self.max_priority is not None:
+            self._set_max_priority(options.setdefault('queue_arguments', {}))
         q = self[name] = Queue.from_dict(name, **options)
         return q
 
@@ -128,6 +137,10 @@ class Queues(dict):
             return args.update({'x-ha-policy': 'nodes',
                                 'x-ha-policy-params': list(policy)})
         args['x-ha-policy'] = policy
+
+    def _set_max_priority(self, args):
+        if 'x-max-priority' not in args and self.max_priority is not None:
+            return args.update({'x-max-priority': self.max_priority})
 
     def format(self, indent=0, indent_first=True):
         """Format routing table into string for log dumps."""
@@ -227,7 +240,7 @@ class AMQP(object):
         return self._create_task_sender()
 
     def Queues(self, queues, create_missing=None, ha_policy=None,
-               autoexchange=None):
+               autoexchange=None, max_priority=None):
         """Create new :class:`Queues` instance, using queue defaults
         from the current configuration."""
         conf = self.app.conf
@@ -235,6 +248,8 @@ class AMQP(object):
             create_missing = conf.CELERY_CREATE_MISSING_QUEUES
         if ha_policy is None:
             ha_policy = conf.CELERY_QUEUE_HA_POLICY
+        if max_priority is None:
+            max_priority = conf.CELERY_QUEUE_MAX_PRIORITY
         if not queues and conf.CELERY_DEFAULT_QUEUE:
             queues = (Queue(conf.CELERY_DEFAULT_QUEUE,
                             exchange=self.default_exchange,
@@ -243,7 +258,7 @@ class AMQP(object):
                         else autoexchange)
         return self.queues_cls(
             queues, self.default_exchange, create_missing,
-            ha_policy, autoexchange,
+            ha_policy, autoexchange, max_priority,
         )
 
     def Router(self, queues=None, create_missing=None):
@@ -293,6 +308,9 @@ class AMQP(object):
         eta = eta and eta.isoformat()
         expires = expires and expires.isoformat()
 
+        argsrepr = saferepr(args)
+        kwargsrepr = saferepr(kwargs)
+
         return task_message(
             headers={
                 'lang': 'py',
@@ -305,6 +323,8 @@ class AMQP(object):
                 'timelimit': [time_limit, soft_time_limit],
                 'root_id': root_id,
                 'parent_id': parent_id,
+                'argsrepr': argsrepr,
+                'kwargsrepr': kwargsrepr,
             },
             properties={
                 'correlation_id': task_id,
@@ -323,8 +343,8 @@ class AMQP(object):
                 'root': root_id,
                 'parent': parent_id,
                 'name': name,
-                'args': safe_repr(args),
-                'kwargs': safe_repr(kwargs),
+                'args': argsrepr,
+                'kwargs': kwargsrepr,
                 'retries': retries,
                 'eta': eta,
                 'expires': expires,
@@ -385,8 +405,8 @@ class AMQP(object):
             sent_event={
                 'uuid': task_id,
                 'name': name,
-                'args': safe_repr(args),
-                'kwargs': safe_repr(kwargs),
+                'args': saferepr(args),
+                'kwargs': saferepr(kwargs),
                 'retries': retries,
                 'eta': eta,
                 'expires': expires,

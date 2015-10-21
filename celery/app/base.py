@@ -15,6 +15,7 @@ import warnings
 from collections import defaultdict, deque
 from copy import deepcopy
 from operator import attrgetter
+from functools import wraps
 
 from amqp import promise
 try:
@@ -36,6 +37,7 @@ from celery.exceptions import AlwaysEagerIgnored, ImproperlyConfigured
 from celery.five import items, values
 from celery.loaders import get_loader_cls
 from celery.local import PromiseProxy, maybe_evaluate
+from celery.utils import abstract
 from celery.utils import gen_task_name
 from celery.utils.dispatch import Signal
 from celery.utils.functional import first, maybe_list, head_from_fun
@@ -193,7 +195,7 @@ class Celery(object):
 
         # Signals
         if self.on_configure is None:
-            # used to be a method pre 3.2
+            # used to be a method pre 4.0
             self.on_configure = Signal()
         self.on_after_configure = Signal()
         self.on_after_finalize = Signal()
@@ -246,7 +248,8 @@ class Celery(object):
 
             def _create_task_cls(fun):
                 if shared:
-                    cons = lambda app: app._task_from_fun(fun, **opts)
+                    def cons(app):
+                        return app._task_from_fun(fun, **opts)
                     cons.__name__ = fun.__name__
                     connect_on_app_finalize(cons)
                 if not lazy or self.finalized:
@@ -291,6 +294,20 @@ class Celery(object):
                 '__wrapped__': run}, **options))()
             self._tasks[task.name] = task
             task.bind(self)  # connects task to this app
+
+            autoretry_for = tuple(options.get('autoretry_for', ()))
+            retry_kwargs = options.get('retry_kwargs', {})
+
+            if autoretry_for and not hasattr(task, '_orig_run'):
+
+                @wraps(task.run)
+                def run(*args, **kwargs):
+                    try:
+                        return task._orig_run(*args, **kwargs)
+                    except autoretry_for as exc:
+                        raise task.retry(exc=exc, **retry_kwargs)
+
+                task._orig_run, task.run = task.run, run
         else:
             task = self._tasks[name]
         return task
@@ -504,7 +521,7 @@ class Celery(object):
         if isinstance(self.on_configure, Signal):
             self.on_configure.send(sender=self)
         else:
-            # used to be a method pre 3.2
+            # used to be a method pre 4.0
             self.on_configure()
         if self._config_source:
             self.loader.config_from_object(self._config_source)
@@ -521,8 +538,8 @@ class Celery(object):
         # load lazy periodic tasks
         pending_beat = self._pending_periodic_tasks
         while pending_beat:
-            pargs, pkwargs = pending_beat.popleft()
-            self._add_periodic_task(*pargs, **pkwargs)
+            self._add_periodic_task(*pending_beat.popleft())
+
         # Settings.__setitem__ method, set Settings.change
         if self._preconf:
             for key, value in items(self._preconf):
@@ -546,26 +563,31 @@ class Celery(object):
         kwargs['app'] = self
         return self.canvas.signature(*args, **kwargs)
 
-    def add_periodic_task(self, *args, **kwargs):
-        if not self.configured:
-            return self._pending_periodic_tasks.append((args, kwargs))
-        return self._add_periodic_task(*args, **kwargs)
+    def add_periodic_task(self, schedule, sig,
+                          args=(), kwargs=(), name=None, **opts):
+        key, entry = self._sig_to_periodic_task_entry(
+            schedule, sig, args, kwargs, name, **opts)
+        if self.configured:
+            self._add_periodic_task(key, entry)
+        else:
+            self._pending_periodic_tasks.append((key, entry))
+        return key
 
-    def _add_periodic_task(self, schedule, sig,
-                           args=(), kwargs={}, name=None, **opts):
-        from .task import Task
-
-        sig = (self.signature(sig.name, args, kwargs)
-               if isinstance(sig, Task) else sig.clone(args, kwargs))
-
-        name = name or ':'.join([sig.name, ','.join(map(str, sig.args))])
-        self._conf.CELERYBEAT_SCHEDULE[name] = {
+    def _sig_to_periodic_task_entry(self, schedule, sig,
+                                    args=(), kwargs={}, name=None, **opts):
+        sig = (sig.clone(args, kwargs)
+               if isinstance(sig, abstract.CallableSignature)
+               else self.signature(sig.name, args, kwargs))
+        return name or repr(sig), {
             'schedule': schedule,
             'task': sig.name,
             'args': sig.args,
             'kwargs': sig.kwargs,
             'options': dict(sig.options, **opts),
         }
+
+    def _add_periodic_task(self, key, entry):
+        self._conf.CELERYBEAT_SCHEDULE[key] = entry
 
     def create_task_cls(self):
         """Creates a base task class using default configuration

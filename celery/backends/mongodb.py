@@ -10,6 +10,15 @@ from __future__ import absolute_import
 
 from datetime import datetime, timedelta
 
+from kombu.syn import detect_environment
+from kombu.utils import cached_property
+from kombu.exceptions import EncodeError
+from celery import states
+from celery.exceptions import ImproperlyConfigured
+from celery.five import string_t, items
+
+from .base import BaseBackend
+
 try:
     import pymongo
 except ImportError:  # pragma: no cover
@@ -24,15 +33,6 @@ if pymongo:
 else:                                       # pragma: no cover
     Binary = None                           # noqa
     InvalidDocument = None                  # noqa
-
-from kombu.syn import detect_environment
-from kombu.utils import cached_property
-from kombu.exceptions import EncodeError
-from celery import states
-from celery.exceptions import ImproperlyConfigured
-from celery.five import string_t, items
-
-from .base import BaseBackend
 
 __all__ = ['MongoBackend']
 
@@ -86,8 +86,9 @@ class MongoBackend(BaseBackend):
         if self.url:
             uri_data = pymongo.uri_parser.parse_uri(self.url)
             # build the hosts list to create a mongo connection
-            make_host_str = lambda x: "{0}:{1}".format(x[0], x[1])
-            hostslist = map(make_host_str, uri_data['nodelist'])
+            hostslist = [
+                "{0}:{1}".format(x[0], x[1]) for x in uri_data['nodelist']
+            ]
             self.user = uri_data['username']
             self.password = uri_data['password']
             self.mongo_host = hostslist

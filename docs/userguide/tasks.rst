@@ -73,7 +73,9 @@ these can be specified as arguments to the decorator:
     if you don't know what that is then please read :ref:`first-steps`.
 
     If you're using Django or are still using the "old" module based celery API,
-    then you can import the task decorator like this::
+    then you can import the task decorator like this:
+
+    .. code-block:: python
 
         from celery import task
 
@@ -106,7 +108,7 @@ will be generated out of the function name if a custom name is not provided.
 
 For example:
 
-.. code-block:: python
+.. code-block:: pycon
 
     >>> @app.task(name='sum-of-two-numbers')
     >>> def add(x, y):
@@ -119,13 +121,15 @@ A best practice is to use the module name as a namespace,
 this way names won't collide if there's already a task with that name
 defined in another module.
 
-.. code-block:: python
+.. code-block:: pycon
 
     >>> @app.task(name='tasks.add')
     >>> def add(x, y):
     ...     return x + y
 
-You can tell the name of the task by investigating its name attribute::
+You can tell the name of the task by investigating its name attribute:
+
+.. code-block:: pycon
 
     >>> add.name
     'tasks.add'
@@ -168,7 +172,7 @@ If you install the app under the name ``project.myapp`` then the
 tasks module will be imported as ``project.myapp.tasks``,
 so you must make sure you always import the tasks using the same name:
 
-.. code-block:: python
+.. code-block:: pycon
 
     >>> from project.myapp.tasks import mytask   # << GOOD
 
@@ -177,7 +181,7 @@ so you must make sure you always import the tasks using the same name:
 The second example will cause the task to be named differently
 since the worker and the client imports the modules under different names:
 
-.. code-block:: python
+.. code-block:: pycon
 
     >>> from project.myapp.tasks import mytask
     >>> mytask.name
@@ -220,7 +224,7 @@ on the automatic naming:
 Changing the automatic naming behavior
 --------------------------------------
 
-.. versionadded:: 3.2
+.. versionadded:: 4.0
 
 There are some cases when the default automatic naming is not suitable.
 Consider you have many tasks within many different modules::
@@ -495,6 +499,45 @@ override this default.
         except Exception as exc:
             raise self.retry(exc=exc, countdown=60)  # override the default and
                                                      # retry in 1 minute
+
+Autoretrying
+------------
+
+.. versionadded:: 4.0
+
+Sometimes you may want to retry a task on particular exception. To do so,
+you should wrap a task body with `try-except` statement, for example:
+
+.. code-block:: python
+
+    @app.task
+    def div(a, b):
+        try:
+            return a / b
+        except ZeroDivisionError as exc:
+            raise div.retry(exc=exc)
+
+This may not be acceptable all the time, since you may have a lot of such
+tasks.
+
+Fortunately, you can tell Celery to automatically retry a task using
+`autoretry_for` argument in `~@Celery.task` decorator:
+
+.. code-block:: python
+
+    @app.task(autoretry_for(ZeroDivisionError,))
+    def div(a, b):
+        return a / b
+
+If you want to specify custom arguments for internal `~@Task.retry`
+call, pass `retry_kwargs` argument to `~@Celery.task` decorator:
+
+.. code-block:: python
+
+    @app.task(autoretry_for=(ZeroDivisionError,),
+              retry_kwargs={'max_retries': 5})
+    def div(a, b):
+        return a / b
 
 .. _task-options:
 
@@ -855,7 +898,9 @@ The name of the state is usually an uppercase string.  As an example
 you could have a look at :mod:`abortable tasks <~celery.contrib.abortable>`
 which defines its own custom :state:`ABORTED` state.
 
-Use :meth:`~@Task.update_state` to update a task's state::
+Use :meth:`~@Task.update_state` to update a task's state:.
+
+.. code-block:: python
 
     @app.task(bind=True)
     def upload_files(self, filenames):
@@ -1214,9 +1259,6 @@ Handlers
 
     The return value of this handler is ignored.
 
-on_retry
-~~~~~~~~
-
 .. _task-how-they-work:
 
 How it works
@@ -1229,7 +1271,7 @@ All defined tasks are listed in a registry.  The registry contains
 a list of task names and their task classes.  You can investigate this registry
 yourself:
 
-.. code-block:: python
+.. code-block:: pycon
 
     >>> from proj.celery import app
     >>> app.tasks
@@ -1464,7 +1506,9 @@ that automatically expands some abbreviations in it:
         article.save()
 
 First, an author creates an article and saves it, then the author
-clicks on a button that initiates the abbreviation task::
+clicks on a button that initiates the abbreviation task:
+
+.. code-block:: pycon
 
     >>> article = Article.objects.get(id=102)
     >>> expand_abbreviations.delay(article)
@@ -1484,6 +1528,8 @@ re-fetch the article in the task body:
         article = Article.objects.get(id=article_id)
         article.body.replace('MyCorp', 'My Corporation')
         article.save()
+
+.. code-block:: pycon
 
     >>> expand_abbreviations(article_id)
 

@@ -6,7 +6,7 @@
 
 |build-status| |coverage-status|
 
-:Version: 3.2.0a1 (Cipater)
+:Version: 4.0.0a1 (Cipater)
 :Web: http://celeryproject.org/
 :Download: http://pypi.python.org/pypi/celery/
 :Source: http://github.com/celery/celery/
@@ -450,5 +450,5 @@ file in the top distribution directory for the full license text.
 
 .. |build-status| image:: https://travis-ci.org/celery/celery.svg?branch=master
    :target: https://travis-ci.org/celery/celery
-.. |coverage-status| image:: https://coveralls.io/repos/celery/celery/badge.svg
-   :target: https://coveralls.io/r/celery/celery
+.. |coverage-status| image:: https://codecov.io/gh/celery/celery/badge.svg
+   :target: https://codecov.io/gh/celery/celery

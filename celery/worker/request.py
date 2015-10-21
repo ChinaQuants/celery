@@ -79,7 +79,7 @@ class Request(object):
             'app', 'type', 'name', 'id', 'on_ack', 'body',
             'hostname', 'eventer', 'connection_errors', 'task', 'eta',
             'expires', 'request_dict', 'on_reject', 'utc',
-            'content_type', 'content_encoding',
+            'content_type', 'content_encoding', 'argsrepr', 'kwargsrepr',
             '__weakref__', '__dict__',
         )
 
@@ -111,6 +111,8 @@ class Request(object):
             self.name = headers['shadow']
         if 'timelimit' in headers:
             self.time_limits = headers['timelimit']
+        self.argsrepr = headers.get('argsrepr', '')
+        self.kwargsrepr = headers.get('kwargsrepr', '')
         self.on_ack = on_ack
         self.on_reject = on_reject
         self.hostname = hostname or socket.gethostname()
@@ -150,7 +152,7 @@ class Request(object):
             'delivery_info': {
                 'exchange': delivery_info.get('exchange'),
                 'routing_key': delivery_info.get('routing_key'),
-                'priority': delivery_info.get('priority'),
+                'priority': properties.get('priority'),
                 'redelivered': delivery_info.get('redelivered'),
             }
 
@@ -326,7 +328,6 @@ class Request(object):
     def on_failure(self, exc_info, send_failed_event=True, return_ok=False):
         """Handler called if the task raised an exception."""
         task_ready(self)
-
         if isinstance(exc_info.exception, MemoryError):
             raise MemoryError('Process got: %s' % (exc_info.exception,))
         elif isinstance(exc_info.exception, Reject):
@@ -352,7 +353,14 @@ class Request(object):
                 )
         # (acks_late) acknowledge after result stored.
         if self.task.acks_late:
-            self.acknowledge()
+            reject_and_requeue = (
+                self.task.reject_on_worker_lost and
+                isinstance(exc, WorkerLostError) and
+                self.delivery_info.get('redelivered', False) is False)
+            if reject_and_requeue:
+                self.reject(requeue=True)
+            else:
+                self.acknowledge()
 
         if send_failed_event:
             self.send_event(
@@ -379,6 +387,8 @@ class Request(object):
     def info(self, safe=False):
         return {'id': self.id,
                 'name': self.name,
+                'args': self.argsrepr,
+                'kwargs': self.kwargsrepr,
                 'type': self.type,
                 'body': self.body,
                 'hostname': self.hostname,
@@ -399,7 +409,10 @@ class Request(object):
         return '{0.name}[{0.id}]'.format(self)
 
     def __repr__(self):
-        return '<{0}: {1}>'.format(type(self).__name__, self.humaninfo())
+        return '<{0}: {1} {2} {3}>'.format(
+            type(self).__name__, self.humaninfo(),
+            self.argsrepr, self.kwargsrepr,
+        )
 
     @property
     def tzlocal(self):
@@ -409,8 +422,8 @@ class Request(object):
 
     @property
     def store_errors(self):
-        return (not self.task.ignore_result
-                or self.task.store_errors_even_if_ignored)
+        return (not self.task.ignore_result or
+                self.task.store_errors_even_if_ignored)
 
     @property
     def task_id(self):

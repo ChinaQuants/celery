@@ -1,9 +1,8 @@
 language: python
 sudo: false
-cache:
-  directories:
-    - $HOME/.cache/pip
-python: 2.7
+cache: false
+python:
+    - '3.5'
 env:
   global:
     PYTHONUNBUFFERED=yes
@@ -12,15 +11,17 @@ env:
     - TOXENV=3.3
     - TOXENV=3.4
     - TOXENV=pypy
-install:
-  - pip install tox
-script:
-  - tox -v -- -v
+    - TOXENV=3.5
+    - TOXENV=pypy3
+install: travis_retry pip install -U tox
+script: tox -v -- -v
 after_success:
-  - .tox/$TRAVIS_PYTHON_VERSION/bin/coveralls
+  - .tox/$TRAVIS_PYTHON_VERSION/bin/coverage xml
+  - .tox/$TRAVIS_PYTHON_VERSION/bin/codecov -e TOXENV
 notifications:
   irc:
     channels:
       - "chat.freenode.net#celery"
     on_success: change
     on_failure: change
+sudo: false

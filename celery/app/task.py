@@ -19,6 +19,7 @@ from celery.canvas import signature
 from celery.exceptions import Ignore, MaxRetriesExceededError, Reject, Retry
 from celery.five import class_property, items
 from celery.result import EagerResult
+from celery.utils import abstract
 from celery.utils import uuid, maybe_reraise
 from celery.utils.functional import mattrgetter, maybe_list
 from celery.utils.imports import instantiate
@@ -219,6 +220,18 @@ class Task(object):
     #: :setting:`CELERY_ACKS_LATE` setting.
     acks_late = None
 
+    #: Even if :attr:`acks_late` is enabled, the worker will
+    #: acknowledge tasks when the worker process executing them abrubtly
+    #: exits or is signalled (e.g. :sig:`KILL`/:sig:`INT`, etc).
+    #:
+    #: Setting this to true allows the message to be requeued instead,
+    #: so that the task will execute again by the same worker, or another
+    #: worker.
+    #:
+    #: Warning: Enabling this can cause message loops; make sure you know
+    #: what you're doing.
+    reject_on_worker_lost = None
+
     #: Tuple of expected exceptions.
     #:
     #: These are errors that are expected in normal operation
@@ -229,6 +242,9 @@ class Task(object):
 
     #: Default task expiry time.
     expires = None
+
+    #: Task request stack, the current request will be the topmost.
+    request_stack = None
 
     #: Some may expect a request to exist even if the task has not been
     #: called.  This should probably be deprecated.
@@ -244,6 +260,7 @@ class Task(object):
         ('rate_limit', 'CELERY_DEFAULT_RATE_LIMIT'),
         ('track_started', 'CELERY_TRACK_STARTED'),
         ('acks_late', 'CELERY_ACKS_LATE'),
+        ('reject_on_worker_lost', 'CELERY_REJECT_ON_WORKER_LOST'),
         ('ignore_result', 'CELERY_IGNORE_RESULT'),
         ('store_errors_even_if_ignored',
             'CELERY_STORE_ERRORS_EVEN_IF_IGNORED'),
@@ -466,7 +483,7 @@ class Task(object):
         except AttributeError:
             pass
         else:
-            check_arguments(*args or (), **kwargs or {})
+            check_arguments(*(args or ()), **(kwargs or {}))
 
         app = self._get_app()
         if app.conf.CELERY_ALWAYS_EAGER:
@@ -554,10 +571,12 @@ class Task(object):
         :keyword countdown: Time in seconds to delay the retry for.
         :keyword eta: Explicit time and date to run the retry at
                       (must be a :class:`~datetime.datetime` instance).
-        :keyword max_retries: If set, overrides the default retry limit.
-            A value of :const:`None`, means "use the default", so if you want
-            infinite retries you would have to set the :attr:`max_retries`
-            attribute of the task to :const:`None` first.
+        :keyword max_retries: If set, overrides the default retry limit for
+            this execution. Changes to this parameter do not propagate to
+            subsequent task retry attempts. A value of :const:`None`, means
+            "use the default", so if you want infinite retries you would
+            have to set the :attr:`max_retries` attribute of the task to
+            :const:`None` first.
         :keyword time_limit: If set, overrides the default time limit.
         :keyword soft_time_limit: If set, overrides the default soft
                                   time limit.
@@ -577,7 +596,7 @@ class Task(object):
 
         **Example**
 
-        .. code-block:: python
+        .. code-block:: pycon
 
             >>> from imaginary_twitter_lib import Twitter
             >>> from proj.celery import app
@@ -920,4 +939,5 @@ class Task(object):
     @property
     def __name__(self):
         return self.__class__.__name__
+abstract.CallableTask.register(Task)
 BaseTask = Task  # compat alias

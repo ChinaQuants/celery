@@ -213,6 +213,10 @@ Can be one of the following:
     Use `Cassandra`_ to store the results.
     See :ref:`conf-cassandra-result-backend`.
 
+* new_cassandra
+    Use `new_cassandra`_ to store the results, using newer database driver than _cassandra_.
+    See :ref:`conf-new_cassandra-result-backend`.
+
 * ironcache
     Use `IronCache`_ to store the results.
     See :ref:`conf-ironcache-result-backend`.
@@ -396,6 +400,9 @@ Using multiple memcached servers:
 
 The "memory" backend stores the cache in memory only:
 
+.. code-block:: python
+
+    CELERY_RESULT_BACKEND = 'cache'
     CELERY_CACHE_BACKEND = 'memory'
 
 CELERY_CACHE_BACKEND_OPTIONS
@@ -434,7 +441,7 @@ Configuring the backend URL
 
     To install the redis package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install redis
 
@@ -528,7 +535,96 @@ Example configuration
         'taskmeta_collection': 'my_taskmeta_collection',
     }
 
-.. _conf-cassandra-result-backend:
+.. _conf-new_cassandra-result-backend:
+
+
+new_cassandra backend settings
+--------------------------
+
+.. note::
+
+    This Cassandra backend driver requires :mod:`cassandra-driver`.
+    https://pypi.python.org/pypi/cassandra-driver
+
+    To install, use `pip` or `easy_install`:
+
+    .. code-block:: bash
+
+        $ pip install cassandra-driver
+
+This backend requires the following configuration directives to be set.
+
+.. setting:: CASSANDRA_SERVERS
+
+CASSANDRA_SERVERS
+~~~~~~~~~~~~~~~~~
+
+List of ``host`` Cassandra servers. e.g.::
+
+    CASSANDRA_SERVERS = ['localhost']
+
+
+.. setting:: CASSANDRA_PORT
+
+CASSANDRA_PORT
+~~~~~~~~~~~~~~
+
+Port to contact the Cassandra servers on. Default is 9042.
+
+.. setting:: CASSANDRA_KEYSPACE
+
+CASSANDRA_KEYSPACE
+~~~~~~~~~~~~~~~~~~
+
+The keyspace in which to store the results. e.g.::
+
+    CASSANDRA_KEYSPACE = 'tasks_keyspace'
+
+.. setting:: CASSANDRA_COLUMN_FAMILY
+
+CASSANDRA_TABLE
+~~~~~~~~~~~~~~~~~~~~~~~
+
+The table (column family) in which to store the results. e.g.::
+
+    CASSANDRA_TABLE = 'tasks'
+
+.. setting:: CASSANDRA_READ_CONSISTENCY
+
+CASSANDRA_READ_CONSISTENCY
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The read consistency used. Values can be ``ONE``, ``TWO``, ``THREE``, ``QUORUM``, ``ALL``,
+``LOCAL_QUORUM``, ``EACH_QUORUM``, ``LOCAL_ONE``.
+
+.. setting:: CASSANDRA_WRITE_CONSISTENCY
+
+CASSANDRA_WRITE_CONSISTENCY
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The write consistency used. Values can be ``ONE``, ``TWO``, ``THREE``, ``QUORUM``, ``ALL``,
+``LOCAL_QUORUM``, ``EACH_QUORUM``, ``LOCAL_ONE``.
+
+.. setting:: CASSANDRA_ENTRY_TTL
+
+CASSANDRA_ENTRY_TTL
+~~~~~~~~~~~~~~~~~~~
+
+Time-to-live for status entries. They will expire and be removed after that many seconds
+after adding. Default (None) means they will never expire.
+
+Example configuration
+~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: python
+
+    CASSANDRA_SERVERS = ['localhost']
+    CASSANDRA_KEYSPACE = 'celery'
+    CASSANDRA_COLUMN_FAMILY = 'task_results'
+    CASSANDRA_READ_CONSISTENCY = 'ONE'
+    CASSANDRA_WRITE_CONSISTENCY = 'ONE'
+    CASSANDRA_ENTRY_TTL = 86400
+
 
 Cassandra backend settings
 --------------------------
@@ -540,7 +636,7 @@ Cassandra backend settings
 
     To install the pycassa package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install pycassa
 
@@ -636,7 +732,7 @@ Riak backend settings
 
     To install the riak package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install riak
 
@@ -702,7 +798,7 @@ IronCache backend settings
 
     To install the iron_celery package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install iron_celery
 
@@ -729,7 +825,7 @@ Couchbase backend settings
 
     To install the couchbase package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install couchbase
 
@@ -775,7 +871,7 @@ CouchDB backend settings
 
     To install the couchbase package use `pip` or `easy_install`:
 
-    .. code-block:: bash
+    .. code-block:: console
 
         $ pip install pycouchdb
 
@@ -967,7 +1063,7 @@ With the follow settings:
 
 The final routing options for ``tasks.add`` will become:
 
-.. code-block:: python
+.. code-block:: javascript
 
     {"exchange": "cpubound",
      "routing_key": "tasks.add",
@@ -1165,6 +1261,20 @@ default is ``amqp``, which uses ``librabbitmq`` by default or falls back to
 ``couchdb``.
 It can also be a fully qualified path to your own transport implementation.
 
+More than broker URL, of the same transport, can also be specified.
+The broker URLs can be passed in as a single string that is semicolon delimited::
+
+    BROKER_URL = 'transport://userid:password@hostname:port//;transport://userid:password@hostname:port//'
+
+Or as a list::
+
+    BROKER_URL = [
+        'transport://userid:password@localhost:port//',
+        'transport://userid:password@hostname:port//'
+    ]
+
+The brokers will then be used in the :setting:`BROKER_FAILOVER_STRATEGY`.
+
 See :ref:`kombu:connection-urls` in the Kombu documentation for more
 information.
 
@@ -1203,9 +1313,40 @@ will be performed every 5 seconds (twice the heartbeat sending rate).
 
 BROKER_USE_SSL
 ~~~~~~~~~~~~~~
+:transports supported: ``pyamqp``
 
-Use SSL to connect to the broker.  Off by default.  This may not be supported
-by all transports.
+
+Toggles SSL usage on broker connection and SSL settings.
+
+If ``True`` the connection will use SSL with default SSL settings.
+If set to a dict, will configure SSL connection according to the specified
+policy. The format used is python `ssl.wrap_socket()
+options <https://docs.python.org/3/library/ssl.html#ssl.wrap_socket>`_.
+
+Default is ``False`` (no SSL).
+
+Note that SSL socket is generally served on a separate port by the broker.
+
+Example providing a client cert and validating the server cert against a custom
+certificate authority:
+
+.. code-block:: python
+
+    import ssl
+
+    BROKER_USE_SSL = {
+      'keyfile': '/var/ssl/private/worker-key.pem',
+      'certfile': '/var/ssl/amqp-server-cert.pem',
+      'ca_certs': '/var/ssl/myca.pem',
+      'cert_reqs': ssl.CERT_REQUIRED
+    }
+
+.. warning::
+
+    Be careful using ``BROKER_USE_SSL=True``, it is possible that your default
+    configuration do not validate the server cert at all, please read Python
+    `ssl module security
+    considerations <https://docs.python.org/3/library/ssl.html#ssl-security>`_.
 
 .. setting:: BROKER_POOL_LIMIT
 
@@ -1458,6 +1599,24 @@ has been executed, not *just before*, which is the default behavior.
 
     FAQ: :ref:`faq-acks_late-vs-retry`.
 
+.. setting:: CELERY_REJECT_ON_WORKER_LOST
+
+CELERY_REJECT_ON_WORKER_LOST
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Even if :attr:`acks_late` is enabled, the worker will
+acknowledge tasks when the worker process executing them abrubtly
+exits or is signalled (e.g. :sig:`KILL`/:sig:`INT`, etc).
+
+Setting this to true allows the message to be requeued instead,
+so that the task will execute again by the same worker, or another
+worker.
+
+.. warning::
+
+    Enabling this can cause message loops; make sure you know
+    what you're doing.
+
 .. _conf-worker:
 
 Worker
@@ -1668,7 +1827,7 @@ The default is 2 seconds.
 
 EMAIL_CHARSET
 ~~~~~~~~~~~~~
-.. versionadded:: 3.2.0
+.. versionadded:: 4.0
 
 Charset for outgoing emails. Default is "us-ascii".
 

@@ -103,8 +103,8 @@ CELERY_TEST_CONFIG = {
         'host': os.environ.get('MONGO_HOST') or 'localhost',
         'port': os.environ.get('MONGO_PORT') or 27017,
         'database': os.environ.get('MONGO_DB') or 'celery_unittests',
-        'taskmeta_collection': (os.environ.get('MONGO_TASKMETA_COLLECTION')
-                                or 'taskmeta_collection'),
+        'taskmeta_collection': (os.environ.get('MONGO_TASKMETA_COLLECTION') or
+                                'taskmeta_collection'),
         'user': os.environ.get('MONGO_USER'),
         'password': os.environ.get('MONGO_PASSWORD'),
     }
@@ -149,7 +149,7 @@ class _ContextMock(Mock):
     in the class, not just the instance."""
 
     def __enter__(self):
-        pass
+        return self
 
     def __exit__(self, *exc_info):
         pass
@@ -303,6 +303,10 @@ class _AssertWarnsContext(_AssertRaisesBaseContext):
             raise self.failureException('%s not triggered' % exc_name)
 
 
+def alive_threads():
+    return [thread for thread in threading.enumerate() if thread.is_alive()]
+
+
 class Case(unittest.TestCase):
 
     def assertWarns(self, expected_warning):
@@ -391,6 +395,7 @@ def depends_on_current_app(fun):
 
 class AppCase(Case):
     contained = True
+    _threads_at_startup = [None]
 
     def __init__(self, *args, **kwargs):
         super(AppCase, self).__init__(*args, **kwargs)
@@ -406,8 +411,13 @@ class AppCase(Case):
     def Celery(self, *args, **kwargs):
         return UnitApp(*args, **kwargs)
 
+    def threads_at_startup(self):
+        if self._threads_at_startup[0] is None:
+            self._threads_at_startup[0] = alive_threads()
+        return self._threads_at_startup[0]
+
     def setUp(self):
-        self._threads_at_setup = list(threading.enumerate())
+        self._threads_at_setup = self.threads_at_startup()
         from celery import _state
         from celery import result
         result.task_join_will_block = \
@@ -463,9 +473,7 @@ class AppCase(Case):
         if self.app is not self._current_app:
             self.app.close()
         self.app = None
-        self.assertEqual(
-            self._threads_at_setup, list(threading.enumerate()),
-        )
+        self.assertEqual(self._threads_at_setup, alive_threads())
 
         # Make sure no test left the shutdown flags enabled.
         from celery.worker import state as worker_state
@@ -688,7 +696,7 @@ def replace_module_value(module, name, value=None):
         yield
     finally:
         if prev is not None:
-            setattr(sys, name, prev)
+            setattr(module, name, prev)
         if not has_prev:
             try:
                 delattr(module, name)
@@ -713,7 +721,7 @@ def sys_platform(value):
 
 @contextmanager
 def reset_modules(*modules):
-    prev = dict((k, sys.modules.pop(k)) for k in modules if k in sys.modules)
+    prev = {k: sys.modules.pop(k) for k in modules if k in sys.modules}
     try:
         yield
     finally:
