@@ -247,8 +247,8 @@ To disable retry you can set the ``retry`` execution option to :const:`False`:
     .. hlist::
         :columns: 2
 
-        - :setting:`CELERY_TASK_PUBLISH_RETRY`
-        - :setting:`CELERY_TASK_PUBLISH_RETRY_POLICY`
+        - :setting:`task_publish_retry`
+        - :setting:`task_publish_retry_policy`
 
 Retry Policy
 ------------
@@ -315,7 +315,7 @@ so every message in Celery has a ``content_type`` header that
 describes the serialization method used to encode it.
 
 The default serializer is :mod:`pickle`, but you can
-change this using the :setting:`CELERY_TASK_SERIALIZER` setting,
+change this using the :setting:`task_serializer` setting,
 or for each individual task, or even per message.
 
 There's built-in support for :mod:`pickle`, `JSON`, `YAML`
@@ -382,7 +382,7 @@ to use when sending a task:
 
     1. The `serializer` execution option.
     2. The :attr:`@-Task.serializer` attribute
-    3. The :setting:`CELERY_TASK_SERIALIZER` setting.
+    3. The :setting:`task_serializer` setting.
 
 
 Example setting a custom serializer for a single task invocation:
@@ -405,7 +405,7 @@ to use when sending a task:
 
     1. The `compression` execution option.
     2. The :attr:`@-Task.compression` attribute.
-    3. The :setting:`CELERY_MESSAGE_COMPRESSION` attribute.
+    3. The :setting:`task_compression` attribute.
 
 Example specifying the compression used when calling a task::
 
@@ -424,7 +424,7 @@ Connections
 
     The connection pool is enabled by default since version 2.5.
 
-    See the :setting:`BROKER_POOL_LIMIT` setting for more information.
+    See the :setting:`broker_pool_limit` setting for more information.
 
 You can handle the connection manually by creating a
 publisher:
@@ -449,7 +449,7 @@ Though this particular example is much better expressed as a group:
     >>> from celery import group
 
     >>> numbers = [(2, 2), (4, 4), (8, 8), (16, 16)]
-    >>> res = group(add.s(i) for i in numbers).apply_async()
+    >>> res = group(add.s(i, j) for i, j in numbers).apply_async()
 
     >>> res.get()
     [4, 8, 16, 32]
@@ -475,7 +475,7 @@ the workers :option:`-Q` argument:
 .. seealso::
 
     Hard-coding queue names in code is not recommended, the best practice
-    is to use configuration routers (:setting:`CELERY_ROUTES`).
+    is to use configuration routers (:setting:`task_routes`).
 
     To find out more about routing, please see :ref:`guide-routing`.
 
@@ -497,6 +497,6 @@ AMQP's full routing capabilities. Interested parties may read the
 
 - priority
 
-    A number between `0` and `9`, where `0` is the highest priority.
+    A number between `0` and `255`, where `255` is the highest priority.
 
-    Supported by: redis, beanstalk
+    Supported by: rabbitmq, redis (priority reversed, 0 is highest), beanstalk

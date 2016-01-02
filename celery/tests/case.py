@@ -34,7 +34,7 @@ except ImportError:
 from nose import SkipTest
 from kombu import Queue
 from kombu.log import NullHandler
-from kombu.utils import nested, symbol_by_name
+from kombu.utils import symbol_by_name
 
 from celery import Celery
 from celery.app import current_app
@@ -54,7 +54,7 @@ __all__ = [
     'skip_if_environ', 'todo', 'skip', 'skip_if',
     'skip_unless', 'mask_modules', 'override_stdouts', 'mock_module',
     'replace_module_value', 'sys_platform', 'reset_modules',
-    'patch_modules', 'mock_context', 'mock_open', 'patch_many',
+    'patch_modules', 'mock_context', 'mock_open',
     'assert_signal_called', 'skip_if_pypy',
     'skip_if_jython', 'task_message_from_sig', 'restore_logging',
 ]
@@ -85,21 +85,21 @@ Test {0} Modified handlers for the root logger\
 
 CELERY_TEST_CONFIG = {
     #: Don't want log output when running suite.
-    'CELERYD_HIJACK_ROOT_LOGGER': False,
-    'CELERY_SEND_TASK_ERROR_EMAILS': False,
-    'CELERY_DEFAULT_QUEUE': 'testcelery',
-    'CELERY_DEFAULT_EXCHANGE': 'testcelery',
-    'CELERY_DEFAULT_ROUTING_KEY': 'testcelery',
-    'CELERY_QUEUES': (
+    'worker_hijack_root_logger': False,
+    'worker_log_color': False,
+    'task_send_error_emails': False,
+    'task_default_queue': 'testcelery',
+    'task_default_exchange': 'testcelery',
+    'task_default_routing_key': 'testcelery',
+    'task_queues': (
         Queue('testcelery', routing_key='testcelery'),
     ),
-    'CELERY_ACCEPT_CONTENT': ('json', 'pickle'),
-    'CELERY_ENABLE_UTC': True,
-    'CELERY_TIMEZONE': 'UTC',
-    'CELERYD_LOG_COLOR': False,
+    'accept_content': ('json', 'pickle'),
+    'enable_utc': True,
+    'timezone': 'UTC',
 
     # Mongo results tests (only executed if installed and running)
-    'CELERY_MONGODB_BACKEND_SETTINGS': {
+    'mongodb_backend_settings': {
         'host': os.environ.get('MONGO_HOST') or 'localhost',
         'port': os.environ.get('MONGO_PORT') or 27017,
         'database': os.environ.get('MONGO_DB') or 'celery_unittests',
@@ -309,6 +309,51 @@ def alive_threads():
 
 class Case(unittest.TestCase):
 
+    def patch(self, *path, **options):
+        manager = patch(".".join(path), **options)
+        patched = manager.start()
+        self.addCleanup(manager.stop)
+        return patched
+
+    def mock_modules(self, *mods):
+        modules = []
+        for mod in mods:
+            mod = mod.split('.')
+            modules.extend(reversed([
+                '.'.join(mod[:-i] if i else mod) for i in range(len(mod))
+            ]))
+        modules = sorted(set(modules))
+        return self.wrap_context(mock_module(*modules))
+
+    def on_nth_call_do(self, mock, side_effect, n=1):
+
+        def on_call(*args, **kwargs):
+            if mock.call_count >= n:
+                mock.side_effect = side_effect
+            return mock.return_value
+        mock.side_effect = on_call
+        return mock
+
+    def on_nth_call_return(self, mock, retval, n=1):
+
+        def on_call(*args, **kwargs):
+            if mock.call_count >= n:
+                mock.return_value = retval
+            return mock.return_value
+        mock.side_effect = on_call
+        return mock
+
+    def mask_modules(self, *modules):
+        self.wrap_context(mask_modules(*modules))
+
+    def wrap_context(self, context):
+        ret = context.__enter__()
+        self.addCleanup(partial(context.__exit__, None, None, None))
+        return ret
+
+    def mock_environ(self, env_name, env_value):
+        return self.wrap_context(mock_environ(env_name, env_value))
+
     def assertWarns(self, expected_warning):
         return _AssertWarnsContext(expected_warning, self, None)
 
@@ -420,6 +465,8 @@ class AppCase(Case):
         self._threads_at_setup = self.threads_at_startup()
         from celery import _state
         from celery import result
+        self._prev_res_join_block = result.task_join_will_block
+        self._prev_state_join_block = _state.task_join_will_block
         result.task_join_will_block = \
             _state.task_join_will_block = lambda: False
         self._current_app = current_app()
@@ -446,17 +493,21 @@ class AppCase(Case):
             raise
 
     def _teardown_app(self):
+        from celery import _state
+        from celery import result
         from celery.utils.log import LoggingProxy
         assert sys.stdout
         assert sys.stderr
         assert sys.__stdout__
         assert sys.__stderr__
         this = self._get_test_name()
-        if isinstance(sys.stdout, LoggingProxy) or \
-                isinstance(sys.__stdout__, LoggingProxy):
+        result.task_join_will_block = self._prev_res_join_block
+        _state.task_join_will_block = self._prev_state_join_block
+        if isinstance(sys.stdout, (LoggingProxy, Mock)) or \
+                isinstance(sys.__stdout__, (LoggingProxy, Mock)):
             raise RuntimeError(CASE_LOG_REDIRECT_EFFECT.format(this, 'stdout'))
-        if isinstance(sys.stderr, LoggingProxy) or \
-                isinstance(sys.__stderr__, LoggingProxy):
+        if isinstance(sys.stderr, (LoggingProxy, Mock)) or \
+                isinstance(sys.__stderr__, (LoggingProxy, Mock)):
             raise RuntimeError(CASE_LOG_REDIRECT_EFFECT.format(this, 'stderr'))
         backend = self.app.__dict__.get('backend')
         if backend is not None:
@@ -526,19 +577,28 @@ def wrap_logger(logger, loglevel=logging.ERROR):
         logger.handlers = old_handlers
 
 
+@contextmanager
+def mock_environ(env_name, env_value):
+    sentinel = object()
+    prev_val = os.environ.get(env_name, sentinel)
+    os.environ[env_name] = env_value
+    try:
+        yield env_value
+    finally:
+        if prev_val is sentinel:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = prev_val
+
+
 def with_environ(env_name, env_value):
 
     def _envpatched(fun):
 
         @wraps(fun)
         def _patch_environ(*args, **kwargs):
-            prev_val = os.environ.get(env_name)
-            os.environ[env_name] = env_value
-            try:
+            with mock_environ(env_name, env_value):
                 return fun(*args, **kwargs)
-            finally:
-                os.environ[env_name] = prev_val or ''
-
         return _patch_environ
     return _envpatched
 
@@ -803,10 +863,6 @@ def mock_open(typ=WhateverIO, side_effect=None):
             yield val
 
 
-def patch_many(*targets):
-    return nested(*[patch(target) for target in targets])
-
-
 @contextmanager
 def assert_signal_called(signal, **expected):
     handler = Mock()
@@ -839,7 +895,49 @@ def skip_if_jython(fun):
     return _inner
 
 
-def task_message_from_sig(app, sig, utc=True):
+def TaskMessage(name, id=None, args=(), kwargs={}, callbacks=None,
+                errbacks=None, chain=None, shadow=None, utc=None, **options):
+    from celery import uuid
+    from kombu.serialization import dumps
+    id = id or uuid()
+    message = Mock(name='TaskMessage-{0}'.format(id))
+    message.headers = {
+        'id': id,
+        'task': name,
+        'shadow': shadow,
+    }
+    embed = {'callbacks': callbacks, 'errbacks': errbacks, 'chain': chain}
+    message.headers.update(options)
+    message.content_type, message.content_encoding, message.body = dumps(
+        (args, kwargs, embed), serializer='json',
+    )
+    message.payload = (args, kwargs, embed)
+    return message
+
+
+def TaskMessage1(name, id=None, args=(), kwargs={}, callbacks=None,
+                 errbacks=None, chain=None, **options):
+    from celery import uuid
+    from kombu.serialization import dumps
+    id = id or uuid()
+    message = Mock(name='TaskMessage-{0}'.format(id))
+    message.headers = {}
+    message.payload = {
+        'task': name,
+        'id': id,
+        'args': args,
+        'kwargs': kwargs,
+        'callbacks': callbacks,
+        'errbacks': errbacks,
+    }
+    message.payload.update(options)
+    message.content_type, message.content_encoding, message.body = dumps(
+        message.payload,
+    )
+    return message
+
+
+def task_message_from_sig(app, sig, utc=True, TaskMessage=TaskMessage):
     sig.freeze()
     callbacks = sig.options.pop('link', None)
     errbacks = sig.options.pop('link_error', None)
@@ -862,6 +960,8 @@ def task_message_from_sig(app, sig, utc=True):
         errbacks=[dict(s) for s in errbacks] if errbacks else None,
         eta=eta,
         expires=expires,
+        utc=utc,
+        **sig.options
     )
 
 
@@ -878,22 +978,3 @@ def restore_logging():
         sys.stdout, sys.stderr, sys.__stdout__, sys.__stderr__ = outs
         root.level = level
         root.handlers[:] = handlers
-
-
-def TaskMessage(name, id=None, args=(), kwargs={}, callbacks=None,
-                errbacks=None, chain=None, **options):
-    from celery import uuid
-    from kombu.serialization import dumps
-    id = id or uuid()
-    message = Mock(name='TaskMessage-{0}'.format(id))
-    message.headers = {
-        'id': id,
-        'task': name,
-    }
-    embed = {'callbacks': callbacks, 'errbacks': errbacks, 'chain': chain}
-    message.headers.update(options)
-    message.content_type, message.content_encoding, message.body = dumps(
-        (args, kwargs, embed), serializer='json',
-    )
-    message.payload = (args, kwargs, embed)
-    return message

@@ -14,12 +14,14 @@ import threading
 from collections import OrderedDict
 from functools import partial, wraps
 from inspect import getargspec, isfunction
-from itertools import islice
+from itertools import chain, islice
 
-from kombu.utils import cached_property
-from kombu.utils.functional import lazy, maybe_evaluate, is_list, maybe_list
+from amqp import promise
+from kombu.utils.functional import (
+    dictfilter, lazy, maybe_evaluate, is_list, maybe_list,
+)
 
-from celery.five import UserDict, UserList, items, keys
+from celery.five import UserDict, UserList, keys, range
 
 __all__ = ['LRUCache', 'is_list', 'maybe_list', 'memoize', 'mlazy', 'noop',
            'first', 'firstmethod', 'chunks', 'padlist', 'mattrgetter', 'uniq',
@@ -70,9 +72,8 @@ class LRUCache(UserDict):
             data.update(*args, **kwargs)
             if limit and len(data) > limit:
                 # pop additional items in case limit exceeded
-                # negative overflow will lead to an empty list
-                for item in islice(iter(data), len(data) - limit):
-                    data.pop(item)
+                for _ in range(len(data) - limit):
+                    data.popitem(last=False)
 
     def popitem(self, last=True):
         with self.mutex:
@@ -210,6 +211,17 @@ def noop(*args, **kwargs):
     pass
 
 
+def pass1(arg, *args, **kwargs):
+    return arg
+
+
+def evaluate_promises(it):
+    for value in it:
+        if isinstance(value, promise):
+            value = value()
+        yield value
+
+
 def first(predicate, it):
     """Return the first element in `iterable` that `predicate` Gives a
     :const:`True` value for.
@@ -218,7 +230,8 @@ def first(predicate, it):
 
     """
     return next(
-        (v for v in it if (predicate(v) if predicate else v is not None)),
+        (v for v in evaluate_promises(it) if (
+            predicate(v) if predicate is not None else v is not None)),
         None,
     )
 
@@ -308,6 +321,8 @@ class _regen(UserList, list):
     # must be subclass of list so that json can encode.
     def __init__(self, it):
         self.__it = it
+        self.__index = 0
+        self.__consumed = []
 
     def __reduce__(self):
         return list, (self.data,)
@@ -315,15 +330,30 @@ class _regen(UserList, list):
     def __length_hint__(self):
         return self.__it.__length_hint__()
 
-    @cached_property
+    def __iter__(self):
+        return chain(self.__consumed, self.__it)
+
+    def __getitem__(self, index):
+        if index < 0:
+            return self.data[index]
+        try:
+            return self.__consumed[index]
+        except IndexError:
+            try:
+                for i in range(self.__index, index + 1):
+                    self.__consumed.append(next(self.__it))
+            except StopIteration:
+                raise IndexError(index)
+            else:
+                return self.__consumed[index]
+
+    @property
     def data(self):
-        return list(self.__it)
-
-
-def dictfilter(d=None, **kw):
-    """Remove all keys from dict ``d`` whose value is :const:`None`"""
-    d = kw if d is None else (dict(d, **kw) if kw else d)
-    return {k: v for k, v in items(d) if v is not None}
+        try:
+            self.__consumed.extend(list(self.__it))
+        except StopIteration:
+            pass
+        return self.__consumed
 
 
 def _argsfromspec(spec, replace_defaults=True):
@@ -353,7 +383,7 @@ def head_from_fun(fun, bound=False, debug=False):
         fun_args=_argsfromspec(getargspec(fun)),
         fun_value=1,
     )
-    if debug:
+    if debug:  # pragma: no cover
         print(definition, file=sys.stderr)
     namespace = {'__name__': 'headof_{0}'.format(name)}
     exec(definition, namespace)

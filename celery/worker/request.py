@@ -10,12 +10,12 @@
 from __future__ import absolute_import, unicode_literals
 
 import logging
-import socket
 import sys
 
 from datetime import datetime
 from weakref import ref
 
+from billiard.common import TERM_SIGNAME
 from kombu.utils.encoding import safe_repr, safe_str
 
 from celery import signals
@@ -27,6 +27,7 @@ from celery.exceptions import (
 )
 from celery.five import string
 from celery.platforms import signals as _signals
+from celery.utils import cached_property, gethostname
 from celery.utils.functional import noop
 from celery.utils.log import get_logger
 from celery.utils.timeutils import maybe_iso8601, timezone, maybe_make_aware
@@ -76,10 +77,11 @@ class Request(object):
 
     if not IS_PYPY:  # pragma: no cover
         __slots__ = (
-            'app', 'type', 'name', 'id', 'on_ack', 'body',
-            'hostname', 'eventer', 'connection_errors', 'task', 'eta',
-            'expires', 'request_dict', 'on_reject', 'utc',
+            'app', 'type', 'name', 'id', 'root_id', 'parent_id',
+            'on_ack', 'body', 'hostname', 'eventer', 'connection_errors',
+            'task', 'eta', 'expires', 'request_dict', 'on_reject', 'utc',
             'content_type', 'content_encoding', 'argsrepr', 'kwargsrepr',
+            '_decoded',
             '__weakref__', '__dict__',
         )
 
@@ -98,6 +100,7 @@ class Request(object):
         self.message = message
         self.body = body
         self.utc = utc
+        self._decoded = decoded
         if decoded:
             self.content_type = self.content_encoding = None
         else:
@@ -107,15 +110,17 @@ class Request(object):
 
         self.id = headers['id']
         type = self.type = self.name = headers['task']
+        self.root_id = headers.get('root_id')
+        self.parent_id = headers.get('parent_id')
         if 'shadow' in headers:
-            self.name = headers['shadow']
+            self.name = headers['shadow'] or self.name
         if 'timelimit' in headers:
             self.time_limits = headers['timelimit']
         self.argsrepr = headers.get('argsrepr', '')
         self.kwargsrepr = headers.get('kwargsrepr', '')
         self.on_ack = on_ack
         self.on_reject = on_reject
-        self.hostname = hostname or socket.gethostname()
+        self.hostname = hostname or gethostname()
         self.eventer = eventer
         self.connection_errors = connection_errors or ()
         self.task = task or self.app.tasks[type]
@@ -211,7 +216,7 @@ class Request(object):
             self.acknowledge()
 
         request = self.request_dict
-        args, kwargs, embed = self.message.payload
+        args, kwargs, embed = self._payload
         request.update({'loglevel': loglevel, 'logfile': logfile,
                         'hostname': self.hostname, 'is_eager': False,
                         'args': args, 'kwargs': kwargs}, **embed or {})
@@ -230,7 +235,7 @@ class Request(object):
                 return True
 
     def terminate(self, pool, signal=None):
-        signal = _signals.signum(signal or 'TERM')
+        signal = _signals.signum(signal or TERM_SIGNAME)
         if self.time_start:
             pool.terminate_job(self.worker_pid, signal)
             self._announce_revoked('terminated', True, signal, False)
@@ -245,8 +250,9 @@ class Request(object):
         task_ready(self)
         self.send_event('task-revoked',
                         terminated=terminated, signum=signum, expired=expired)
-        if self.store_errors:
-            self.task.backend.mark_as_revoked(self.id, reason, request=self)
+        self.task.backend.mark_as_revoked(
+            self.id, reason, request=self, store_result=self.store_errors,
+        )
         self.acknowledge()
         self._already_revoked = True
         send_revoked(self.task, request=self,
@@ -296,8 +302,9 @@ class Request(object):
                   timeout, self.name, self.id)
             exc = TimeLimitExceeded(timeout)
 
-        if self.store_errors:
-            self.task.backend.mark_as_failure(self.id, exc, request=self)
+        self.task.backend.mark_as_failure(
+            self.id, exc, request=self, store_result=self.store_errors,
+        )
 
         if self.task.acks_late:
             self.acknowledge()
@@ -342,23 +349,24 @@ class Request(object):
 
         # These are special cases where the process would not have had
         # time to write the result.
-        if self.store_errors:
-            if isinstance(exc, Terminated):
-                self._announce_revoked(
-                    'terminated', True, string(exc), False)
-                send_failed_event = False  # already sent revoked event
-            elif isinstance(exc, WorkerLostError) or not return_ok:
-                self.task.backend.mark_as_failure(
-                    self.id, exc, request=self,
-                )
+        if isinstance(exc, Terminated):
+            self._announce_revoked(
+                'terminated', True, string(exc), False)
+            send_failed_event = False  # already sent revoked event
+        elif isinstance(exc, WorkerLostError) or not return_ok:
+            self.task.backend.mark_as_failure(
+                self.id, exc, request=self, store_result=self.store_errors,
+            )
         # (acks_late) acknowledge after result stored.
         if self.task.acks_late:
-            reject_and_requeue = (
+            requeue = self.delivery_info.get('redelivered', None) is False
+            reject = (
                 self.task.reject_on_worker_lost and
-                isinstance(exc, WorkerLostError) and
-                self.delivery_info.get('redelivered', False) is False)
-            if reject_and_requeue:
-                self.reject(requeue=True)
+                isinstance(exc, WorkerLostError)
+            )
+            if reject:
+                self.reject(requeue=requeue)
+                send_failed_event = False
             else:
                 self.acknowledge()
 
@@ -383,6 +391,7 @@ class Request(object):
         if not self.acknowledged:
             self.on_reject(logger, self.connection_errors, requeue)
             self.acknowledged = True
+            self.send_event('task-rejected', requeue=requeue)
 
     def info(self, safe=False):
         return {'id': self.id,
@@ -417,7 +426,7 @@ class Request(object):
     @property
     def tzlocal(self):
         if self._tzlocal is None:
-            self._tzlocal = self.app.conf.CELERY_TIMEZONE
+            self._tzlocal = self.app.conf.timezone
         return self._tzlocal
 
     @property
@@ -452,6 +461,30 @@ class Request(object):
     def correlation_id(self):
         # used similarly to reply_to
         return self.request_dict['correlation_id']
+
+    @cached_property
+    def _payload(self):
+        return self.body if self._decoded else self.message.payload
+
+    @cached_property
+    def chord(self):
+        # used by backend.mark_as_failure when failure is reported
+        # by parent process
+        _, _, embed = self._payload
+        return embed.get('chord')
+
+    @cached_property
+    def errbacks(self):
+        # used by backend.mark_as_failure when failure is reported
+        # by parent process
+        _, _, embed = self._payload
+        return embed.get('errbacks')
+
+    @cached_property
+    def group(self):
+        # used by backend.on_chord_part_return when failures reported
+        # by parent process
+        return self.request_dict['group']
 
 
 def create_request_cls(base, task, pool, hostname, eventer,

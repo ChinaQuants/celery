@@ -10,7 +10,6 @@ from __future__ import absolute_import
 
 from datetime import datetime, timedelta
 
-from kombu.syn import detect_environment
 from kombu.utils import cached_property
 from kombu.exceptions import EncodeError
 from celery import states
@@ -32,7 +31,9 @@ if pymongo:
     from pymongo.errors import InvalidDocument  # noqa
 else:                                       # pragma: no cover
     Binary = None                           # noqa
-    InvalidDocument = None                  # noqa
+
+    class InvalidDocument(Exception):       # noqa
+        pass
 
 __all__ = ['MongoBackend']
 
@@ -84,6 +85,9 @@ class MongoBackend(BaseBackend):
 
         # update conf with mongo uri data, only if uri was given
         if self.url:
+            if self.url == 'mongodb://':
+                self.url += 'localhost'
+
             uri_data = pymongo.uri_parser.parse_uri(self.url)
             # build the hosts list to create a mongo connection
             hostslist = [
@@ -99,7 +103,7 @@ class MongoBackend(BaseBackend):
             self.options.update(uri_data['options'])
 
         # update conf with specific settings
-        config = self.app.conf.get('CELERY_MONGODB_BACKEND_SETTINGS')
+        config = self.app.conf.get('mongodb_backend_settings')
         if config is not None:
             if not isinstance(config, dict):
                 raise ImproperlyConfigured(
@@ -150,16 +154,9 @@ class MongoBackend(BaseBackend):
                 if isinstance(host, string_t) \
                    and not host.startswith('mongodb://'):
                     host = 'mongodb://{0}:{1}'.format(host, self.port)
-
-                if host == 'mongodb://':
-                    host += 'localhost'
-
             # don't change self.options
             conf = dict(self.options)
             conf['host'] = host
-
-            if detect_environment() != 'default':
-                conf['use_greenlets'] = True
 
             self._connection = MongoClient(**conf)
 
@@ -184,12 +181,12 @@ class MongoBackend(BaseBackend):
             return data
         return super(MongoBackend, self).decode(data)
 
-    def _store_result(self, task_id, result, status,
+    def _store_result(self, task_id, result, state,
                       traceback=None, request=None, **kwargs):
-        """Store return value and status of an executed task."""
+        """Store return value and state of an executed task."""
 
         meta = {'_id': task_id,
-                'status': status,
+                'status': state,
                 'result': self.encode(result),
                 'date_done': datetime.utcnow(),
                 'traceback': self.encode(traceback),

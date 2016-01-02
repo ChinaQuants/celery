@@ -650,10 +650,10 @@ task-sent
 ~~~~~~~~~
 
 :signature: ``task-sent(uuid, name, args, kwargs, retries, eta, expires,
-              queue, exchange, routing_key)``
+              queue, exchange, routing_key, root_id, parent_id)``
 
 Sent when a task message is published and
-the :setting:`CELERY_SEND_TASK_SENT_EVENT` setting is enabled.
+the :setting:`task_send_sent_event` setting is enabled.
 
 .. event:: task-received
 
@@ -661,7 +661,7 @@ task-received
 ~~~~~~~~~~~~~
 
 :signature: ``task-received(uuid, name, args, kwargs, retries, eta, hostname,
-              timestamp)``
+              timestamp, root_id, parent_id)``
 
 Sent when the worker receives a task.
 
@@ -695,6 +695,16 @@ task-failed
 :signature: ``task-failed(uuid, exception, traceback, hostname, timestamp)``
 
 Sent if the execution of the task failed.
+
+.. event:: task-rejected
+
+task-rejected
+~~~~~~~~~~~~~
+
+:signature: ``task-rejected(uuid, requeued)``
+
+The task was rejected by the worker, possibly to be requeued or moved to a
+dead letter queue.
 
 .. event:: task-revoked
 

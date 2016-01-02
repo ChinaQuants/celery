@@ -1,18 +1,37 @@
 from __future__ import absolute_import
 
+import errno
 import socket
 
 from kombu.async import Hub, READ, WRITE, ERR
 
 from celery.bootsteps import CLOSE, RUN
-from celery.exceptions import InvalidTaskError, WorkerShutdown, WorkerTerminate
+from celery.exceptions import (
+    InvalidTaskError, WorkerLostError, WorkerShutdown, WorkerTerminate,
+)
 from celery.five import Empty
 from celery.platforms import EX_FAILURE
 from celery.worker import state
 from celery.worker.consumer import Consumer
-from celery.worker.loops import asynloop, synloop
+from celery.worker.loops import _quick_drain, asynloop, synloop
 
 from celery.tests.case import AppCase, Mock, task_message_from_sig
+
+
+class PromiseEqual(object):
+
+    def __init__(self, fun, *args, **kwargs):
+        self.fun = fun
+        self.args = args
+        self.kwargs = kwargs
+
+    def __eq__(self, other):
+        return (other.fun == self.fun and
+                other.args == self.args and
+                other.kwargs == self.kwargs)
+
+    def __repr__(self):
+        return '<promise: {0.fun!r} {0.args!r} {0.kwargs!r}>'.format(self)
 
 
 class X(object):
@@ -58,7 +77,8 @@ class X(object):
         self.Hub = self.hub
         self.blueprint.state = RUN
         # need this for create_task_handler
-        _consumer = Consumer(Mock(), timer=Mock(), app=app)
+        self._consumer = _consumer = Consumer(
+            Mock(), timer=Mock(), controller=Mock(), app=app)
         _consumer.on_task_message = on_task_message or []
         self.obj.create_task_handler = _consumer.create_task_handler
         self.on_unknown_message = self.obj.on_unknown_message = Mock(
@@ -126,8 +146,15 @@ class test_asynloop(AppCase):
     def test_drain_after_consume(self):
         x, _ = get_task_callback(self.app, transport_driver_type='amqp')
         self.assertIn(
-            x.connection.drain_events, [p.fun for p in x.hub._ready],
+            _quick_drain, [p.fun for p in x.hub._ready],
         )
+
+    def test_pool_did_not_start_at_startup(self):
+        x = X(self.app)
+        x.obj.restart_count = 0
+        x.obj.pool.did_start_ok.return_value = False
+        with self.assertRaises(WorkerLostError):
+            asynloop(*x.args)
 
     def test_setup_heartbeat(self):
         x = X(self.app, heartbeat=10)
@@ -147,27 +174,32 @@ class test_asynloop(AppCase):
         return x, on_task, message, strategy
 
     def test_on_task_received(self):
-        _, on_task, msg, strategy = self.task_context(self.add.s(2, 2))
+        x, on_task, msg, strategy = self.task_context(self.add.s(2, 2))
         on_task(msg)
         strategy.assert_called_with(
-            msg, None, msg.ack_log_error, msg.reject_log_error, [],
+            msg, None,
+            PromiseEqual(x._consumer.call_soon, msg.ack_log_error),
+            PromiseEqual(x._consumer.call_soon, msg.reject_log_error), [],
         )
 
     def test_on_task_received_executes_on_task_message(self):
         cbs = [Mock(), Mock(), Mock()]
-        _, on_task, msg, strategy = self.task_context(
+        x, on_task, msg, strategy = self.task_context(
             self.add.s(2, 2), on_task_message=cbs,
         )
         on_task(msg)
         strategy.assert_called_with(
-            msg, None, msg.ack_log_error, msg.reject_log_error, cbs,
+            msg, None,
+            PromiseEqual(x._consumer.call_soon, msg.ack_log_error),
+            PromiseEqual(x._consumer.call_soon, msg.reject_log_error),
+            cbs,
         )
 
     def test_on_task_message_missing_name(self):
         x, on_task, msg, strategy = self.task_context(self.add.s(2, 2))
         msg.headers.pop('task')
         on_task(msg)
-        x.on_unknown_message.assert_called_with(msg.payload, msg)
+        x.on_unknown_message.assert_called_with(msg.decode(), msg)
 
     def test_on_task_not_registered(self):
         x, on_task, msg, strategy = self.task_context(self.add.s(2, 2))
@@ -423,3 +455,26 @@ class test_synloop(AppCase):
         x = X(self.app)
         x.close_then_error(x.connection.drain_events)
         self.assertIsNone(synloop(*x.args))
+
+
+class test_quick_drain(AppCase):
+
+    def setup(self):
+        self.connection = Mock(name='connection')
+
+    def test_drain(self):
+        _quick_drain(self.connection, timeout=33.3)
+        self.connection.drain_events.assert_called_with(timeout=33.3)
+
+    def test_drain_error(self):
+        exc = KeyError()
+        exc.errno = 313
+        self.connection.drain_events.side_effect = exc
+        with self.assertRaises(KeyError):
+            _quick_drain(self.connection, timeout=33.3)
+
+    def test_drain_error_EAGAIN(self):
+        exc = KeyError()
+        exc.errno = errno.EAGAIN
+        self.connection.drain_events.side_effect = exc
+        _quick_drain(self.connection, timeout=33.3)

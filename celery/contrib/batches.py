@@ -8,7 +8,7 @@ Experimental task class that buffers messages and processes them as a list.
 .. warning::
 
     For this to work you have to set
-    :setting:`CELERYD_PREFETCH_MULTIPLIER` to zero, or some value where
+    :setting:`worker_prefetch_multiplier` to zero, or some value where
     the final multiplied value is higher than ``flush_every``.
 
     In the future we hope to add the ability to direct batching tasks
@@ -57,7 +57,7 @@ messages, and every 10 seconds.
         )
         # use mark_as_done to manually return response data
         for response, request in zip(reponses, requests):
-            app.backend.mark_as_done(request.id, response)
+            app.backend.mark_as_done(request.id, response, request)
 
 
     def wot_api_real(urls):

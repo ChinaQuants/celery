@@ -449,10 +449,10 @@ data.
 Note that this is not just something you should be aware of with Celery, for
 example also Django uses pickle for its cache client.
 
-For the task messages you can set the :setting:`CELERY_TASK_SERIALIZER`
+For the task messages you can set the :setting:`task_serializer`
 setting to "json" or "yaml" instead of pickle.
 
-Similarly for task results you can set :setting:`CELERY_RESULT_SERIALIZER`.
+Similarly for task results you can set :setting:`result_serializer`.
 
 For more details of the formats used and the lookup order when
 checking which format to use for a task see :ref:`calling-serializers`
@@ -461,7 +461,7 @@ Can messages be encrypted?
 --------------------------
 
 **Answer**: Some AMQP brokers supports using SSL (including RabbitMQ).
-You can enable this using the :setting:`BROKER_USE_SSL` setting.
+You can enable this using the :setting:`broker_use_ssl` setting.
 
 It is also possible to add additional encryption and security to messages,
 if you have a need for this then you should contact the :ref:`mailing-list`.
@@ -517,7 +517,7 @@ as a message. If you don't collect these results, they will build up and
 RabbitMQ will eventually run out of memory.
 
 Results expire after 1 day by default.  It may be a good idea
-to lower this value by configuring the :setting:`CELERY_TASK_RESULT_EXPIRES`
+to lower this value by configuring the :setting:`result_expires`
 setting.
 
 If you don't use the results for a task, make sure you set the
@@ -565,7 +565,7 @@ Tasks
 How can I reuse the same connection when calling tasks?
 -------------------------------------------------------
 
-**Answer**: See the :setting:`BROKER_POOL_LIMIT` setting.
+**Answer**: See the :setting:`broker_pool_limit` setting.
 The connection pool is enabled by default since version 2.5.
 
 .. _faq-sudo-subprocess:
@@ -746,13 +746,15 @@ create a new schedule subclass and override
 Does celery support task priorities?
 ------------------------------------
 
-**Answer**: No. In theory, yes, as AMQP supports priorities. However
-RabbitMQ doesn't implement them yet.
+**Answer**: Yes.
 
-The usual way to prioritize work in Celery, is to route high priority tasks
-to different servers. In the real world this may actually work better than per message
-priorities. You can use this in combination with rate limiting to achieve a
-highly responsive system.
+RabbitMQ supports priorities since version 3.5.0.
+Redis transport emulates support of priorities.
+
+You can also prioritize work by routing high priority tasks
+to different workers.  In the real world this may actually work better
+than per message priorities.  You can use this in combination with rate
+limiting to achieve a responsive system.
 
 .. _faq-acks_late-vs-retry:
 
@@ -808,18 +810,8 @@ Can I schedule tasks to execute at a specific time?
 
 **Answer**: Yes. You can use the `eta` argument of :meth:`Task.apply_async`.
 
-Or to schedule a periodic task at a specific time, use the
-:class:`celery.schedules.crontab` schedule behavior:
+See also :ref:`guide-beat`.
 
-
-.. code-block:: python
-
-    from celery.schedules import crontab
-    from celery.task import periodic_task
-
-    @periodic_task(run_every=crontab(hour=7, minute=30, day_of_week="mon"))
-    def every_monday_morning():
-        print("This is run every Monday morning at 7:30")
 
 .. _faq-safe-worker-shutdown:
 

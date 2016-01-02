@@ -78,7 +78,7 @@ The :program:`celery` program can be used to start the worker (you need to run t
 
 When the worker starts you should see a banner and some messages::
 
-     -------------- celery@halcyon.local v3.1 (Cipater)
+     -------------- celery@halcyon.local v4.0 (0today8)
      ---- **** -----
      --- * ***  * -- [Configuration]
      -- * - **** --- . broker:      amqp://guest@localhost:5672//
@@ -122,7 +122,7 @@ the :ref:`Monitoring and Management guide <guide-monitoring>`.
 tasks from.  The worker can be told to consume from several queues
 at once, and this is used to route messages to specific workers
 as a means for Quality of Service, separation of concerns,
-and emulating priorities, all described in the :ref:`Routing Guide
+and prioritization, all described in the :ref:`Routing Guide
 <guide-routing>`.
 
 You can get a complete list of command-line arguments
@@ -152,7 +152,7 @@ start one or more workers in the background:
 .. code-block:: console
 
     $ celery multi start w1 -A proj -l info
-    celery multi v3.1.1 (Cipater)
+    celery multi v4.0.0 (0today8)
     > Starting nodes...
         > w1.halcyon.local: OK
 
@@ -161,13 +161,13 @@ You can restart it too:
 .. code-block:: console
 
     $ celery  multi restart w1 -A proj -l info
-    celery multi v3.1.1 (Cipater)
+    celery multi v4.0.0 (0today8)
     > Stopping nodes...
         > w1.halcyon.local: TERM -> 64024
     > Waiting for 1 node.....
         > w1.halcyon.local: OK
     > Restarting node w1.halcyon.local: OK
-    celery multi v3.1.1 (Cipater)
+    celery multi v4.0.0 (0today8)
     > Stopping nodes...
         > w1.halcyon.local: TERM -> 64052
 
@@ -369,7 +369,7 @@ states. The stages of a typical task can be::
     PENDING -> STARTED -> SUCCESS
 
 The started state is a special state that is only recorded if the
-:setting:`CELERY_TRACK_STARTED` setting is enabled, or if the
+:setting:`task_track_started` setting is enabled, or if the
 ``@task(track_started=True)`` option is set for the task.
 
 The pending state is actually not a recorded state, but rather
@@ -605,13 +605,13 @@ Routing
 Celery supports all of the routing facilities provided by AMQP,
 but it also supports simple routing where messages are sent to named queues.
 
-The :setting:`CELERY_ROUTES` setting enables you to route tasks by name
+The :setting:`task_routes` setting enables you to route tasks by name
 and keep everything centralized in one location:
 
 .. code-block:: python
 
     app.conf.update(
-        CELERY_ROUTES = {
+        task_routes = {
             'proj.tasks.add': {'queue': 'hipri'},
         },
     )
@@ -732,11 +732,11 @@ All times and dates, internally and in messages uses the UTC timezone.
 When the worker receives a message, for example with a countdown set it
 converts that UTC time to local time.  If you wish to use
 a different timezone than the system timezone then you must
-configure that using the :setting:`CELERY_TIMEZONE` setting:
+configure that using the :setting:`timezone` setting:
 
 .. code-block:: python
 
-    app.conf.CELERY_TIMEZONE = 'Europe/London'
+    app.conf.timezone = 'Europe/London'
 
 Optimization
 ============
