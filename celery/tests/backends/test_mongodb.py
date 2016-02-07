@@ -10,7 +10,7 @@ from celery import uuid
 from celery import states
 from celery.backends import mongodb as module
 from celery.backends.mongodb import (
-    InvalidDocument, MongoBackend, Bunch, pymongo,
+    InvalidDocument, MongoBackend, pymongo,
 )
 from celery.exceptions import ImproperlyConfigured
 from celery.tests.case import (
@@ -48,11 +48,6 @@ class test_MongoBackend(AppCase):
         MongoBackend.decode = self._reset['decode']
         module.Binary = self._reset['Binary']
         datetime.datetime = self._reset['datetime']
-
-    def test_Bunch(self):
-        x = Bunch(foo='foo', bar=2)
-        self.assertEqual(x.foo, 'foo')
-        self.assertEqual(x.bar, 2)
 
     def test_init_no_mongodb(self):
         prev, module.pymongo = module.pymongo, None
@@ -205,15 +200,6 @@ class test_MongoBackend(AppCase):
         self.assertTrue(database is mock_database)
         self.assertFalse(mock_database.authenticate.called)
         self.assertTrue(self.backend.__dict__['database'] is mock_database)
-
-    def test_process_cleanup(self):
-        self.backend._connection = None
-        self.backend.process_cleanup()
-        self.assertEqual(self.backend._connection, None)
-
-        self.backend._connection = 'not none'
-        self.backend.process_cleanup()
-        self.assertEqual(self.backend._connection, None)
 
     @patch('celery.backends.mongodb.MongoBackend._get_database')
     def test_store_result(self, mock_get_database):

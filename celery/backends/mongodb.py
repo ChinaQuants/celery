@@ -38,12 +38,6 @@ else:                                       # pragma: no cover
 __all__ = ['MongoBackend']
 
 
-class Bunch(object):
-
-    def __init__(self, **kw):
-        self.__dict__.update(kw)
-
-
 class MongoBackend(BaseBackend):
 
     mongo_host = None
@@ -161,14 +155,6 @@ class MongoBackend(BaseBackend):
             self._connection = MongoClient(**conf)
 
         return self._connection
-
-    def process_cleanup(self):
-        if self._connection is not None:
-            # MongoDB connection will be closed automatically when object
-            # goes out of scope
-            del(self.collection)
-            del(self.database)
-            self._connection = None
 
     def encode(self, data):
         if self.serializer == 'bson':

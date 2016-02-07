@@ -119,6 +119,13 @@ class DjangoWorkerFixup(object):
         self._cache = import_module('django.core.cache')
         self._settings = symbol_by_name('django.conf:settings')
 
+        try:
+            self.interface_errors = (
+                symbol_by_name('django.db.utils.InterfaceError'),
+            )
+        except (ImportError, AttributeError):
+            self._interface_errors = ()
+
         # Database-related exceptions.
         DatabaseError = symbol_by_name('django.db:DatabaseError')
         try:
@@ -225,14 +232,20 @@ class DjangoWorkerFixup(object):
         try:
             for c in self._db.connections.all():
                 if c and c.connection:
-                    _maybe_close_fd(c.connection)
+                    self._maybe_close_db_fd(c.connection)
         except AttributeError:
             if self._db.connection and self._db.connection.connection:
-                _maybe_close_fd(self._db.connection.connection)
+                self._maybe_close_db_fd(self._db.connection.connection)
 
         # use the _ version to avoid DB_REUSE preventing the conn.close() call
         self._close_database()
         self.close_cache()
+
+    def _maybe_close_db_fd(self, fd):
+        try:
+            _maybe_close_fd(fd)
+        except self.interface_errors:
+            pass
 
     def on_task_prerun(self, sender, **kwargs):
         """Called before every task."""
@@ -269,6 +282,8 @@ class DjangoWorkerFixup(object):
         for close in funs:
             try:
                 close()
+            except self.interface_errors:
+                pass
             except self.database_errors as exc:
                 str_exc = str(exc)
                 if 'closed' not in str_exc and 'not connected' not in str_exc:
